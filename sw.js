@@ -57,8 +57,11 @@ function createStream (port, downloadUrl) {
         if (data === 'end') {
           console.log('[SW] Received "end" - hasFetched:', state.hasFetched)
           if (state.hasFetched) {
-            console.log('[SW] Closing stream now (fetch already happened)')
-            controller.close()
+            console.log('[SW] Closing stream after 500ms delay for Safari to consume')
+            setTimeout(() => {
+              console.log('[SW] Closing stream now')
+              controller.close()
+            }, 500)
           } else {
             console.log('[SW] Deferring close until fetch')
             state.pendingClose = true
@@ -158,12 +161,12 @@ self.onfetch = event => {
   event.respondWith(new Response(stream, { headers: responseHeaders }))
 
   if (state && state.pendingClose && state.controller) {
-    console.log('[SW] Fetch done and pending close - closing stream')
+    console.log('[SW] Fetch done and pending close - closing after delay')
     state.pendingClose = false
     setTimeout(() => {
-      console.log('[SW] Closing stream after short delay')
+      console.log('[SW] Closing stream after fetch + delay')
       state.controller.close()
-    }, 100)
+    }, 500)
   }
 
   port.postMessage({ debug: 'Download started' })
