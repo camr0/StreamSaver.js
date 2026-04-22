@@ -254,7 +254,7 @@
           channel = null
         } else if (evt.data.pull) {
           console.log('[StreamSaver] Received pull from SW - ready for more data')
-          resolvePendingWrite()
+          resolvePending()
         }
       }
 
@@ -273,7 +273,6 @@
     let waitPromise = Promise.resolve()
 
     const resolvePending = () => {
-      console.log('[StreamSaver] Received pull from SW - unblocking write')
       if (pendingResolve) {
         pendingResolve()
         pendingResolve = null
