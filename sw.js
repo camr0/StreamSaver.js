@@ -9,12 +9,9 @@ self.addEventListener('activate', event => {
 })
 
 const map = new Map()
+const streamState = new Map() // Track stream state: { controller, hasFetched, pendingClose }
 
-// This should be called once per download
-// Each event has a dataChannel that the data will be piped through
 self.onmessage = event => {
-  // We send a heartbeat every x second to keep the
-  // service worker alive if a transferable stream is not sent
   if (event.data === 'ping') {
     return
   }
@@ -22,14 +19,12 @@ self.onmessage = event => {
   const data = event.data
   const downloadUrl = data.url || self.registration.scope + Math.random() + '/' + (typeof data === 'string' ? data : data.filename)
   const port = event.ports[0]
-  const metadata = new Array(3) // [stream, data, port]
+  const metadata = new Array(4)
 
   metadata[1] = data
   metadata[2] = port
+  metadata[3] = false
 
-  // Note to self:
-  // old streamsaver v1.2.0 might still use `readableStream`...
-  // but v2.0.0 will always transfer the stream through MessageChannel #94
   if (event.data.readableStream) {
     metadata[0] = event.data.readableStream
   } else if (event.data.transferringReadable) {
@@ -38,21 +33,88 @@ self.onmessage = event => {
       metadata[0] = evt.data.readableStream
     }
   } else {
-    metadata[0] = createStream(port)
+    metadata[0] = createStream(port, downloadUrl)
   }
 
   map.set(downloadUrl, metadata)
   port.postMessage({ download: downloadUrl })
 }
 
-function createStream (port) {
-  // ReadableStream is only supported by chrome 52
+function createStream (port, downloadUrl) {
+  console.log('[SW] Creating ReadableStream for download')
+
+  const CREDIT_WINDOW = 1
+  const state = {
+    controller: null,
+    hasFetched: false,
+    pendingClose: false,
+    chunkQueue: [],
+    outstandingCredits: 0,
+    closed: false,
+    closeStream: null
+  }
+  streamState.set(downloadUrl, state)
+
+  const closeStream = () => {
+    if (state.closed) {
+      return
+    }
+
+    state.closed = true
+    state.controller.close()
+    port.postMessage({ done: true })
+  }
+  state.closeStream = closeStream
+
+  const getBufferedChunks = controller => {
+    const desiredSize = controller.desiredSize
+
+    // Safari's fallback path behaves most reliably when we keep at most one
+    // chunk in flight across the stream queue and message channel.
+    return state.chunkQueue.length + (desiredSize <= 0 ? 1 : 0)
+  }
+
+  const maybeGrantCredits = controller => {
+    const availableSlots = CREDIT_WINDOW - getBufferedChunks(controller) - state.outstandingCredits
+
+    if (availableSlots > 0) {
+      state.outstandingCredits += availableSlots
+      port.postMessage({ pull: availableSlots })
+    }
+  }
+
+  const enqueueChunk = (chunk) => {
+    if (state.outstandingCredits > 0) {
+      state.outstandingCredits--
+    }
+
+    const desiredSize = state.controller.desiredSize
+    if (desiredSize <= 0) {
+      state.chunkQueue.push(chunk)
+    } else {
+      state.controller.enqueue(chunk)
+    }
+  }
+  
   return new ReadableStream({
     start (controller) {
-      // When we receive data on the messageChannel, we write
+      state.controller = controller
       port.onmessage = ({ data }) => {
+        if (data === 'ping') {
+          return
+        }
+
         if (data === 'end') {
-          return controller.close()
+          if (state.chunkQueue.length === 0) {
+            if (state.hasFetched) {
+              setTimeout(closeStream, 500)
+            } else {
+              state.pendingClose = true
+            }
+          } else {
+            state.pendingClose = true
+          }
+          return
         }
 
         if (data === 'abort') {
@@ -60,11 +122,26 @@ function createStream (port) {
           return
         }
 
-        controller.enqueue(data)
+        if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
+          enqueueChunk(data)
+        }
       }
     },
+    pull (controller) {
+      while (state.chunkQueue.length > 0 && controller.desiredSize > 0) {
+        const chunk = state.chunkQueue.shift()
+        controller.enqueue(chunk)
+      }
+
+      if (state.chunkQueue.length === 0 && state.pendingClose) {
+        state.pendingClose = false
+        setTimeout(closeStream, 500)
+        return
+      }
+
+      maybeGrantCredits(controller)
+    },
     cancel (reason) {
-      console.log('user aborted', reason)
       port.postMessage({ abort: true })
     }
   })
@@ -78,13 +155,25 @@ self.onfetch = event => {
     return event.respondWith(new Response('pong'))
   }
 
+  console.log('[SW] Fetch intercepted:', url)
+
   const hijacke = map.get(url)
 
-  if (!hijacke) return null
+  if (!hijacke) {
+    console.log('[SW] No match in map for:', url)
+    return null
+  }
 
   const [ stream, data, port ] = hijacke
 
+  console.log('[SW] Found stream for:', url)
   map.delete(url)
+
+  const state = streamState.get(url)
+  if (state) {
+    state.hasFetched = true
+    console.log('[SW] Fetch happened, pendingClose:', state.pendingClose)
+  }
 
   // Not comfortable letting any user control all headers
   // so we only copy over the length & disposition
@@ -110,6 +199,7 @@ self.onfetch = event => {
   }
 
   if (headers.has('Content-Disposition')) {
+    // Pass through the dual-format disposition from StreamSaver.js
     responseHeaders.set('Content-Disposition', headers.get('Content-Disposition'))
   }
 
@@ -128,7 +218,17 @@ self.onfetch = event => {
     responseHeaders.set('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${safeFileName}`)
   }
 
+  console.log('[SW] Responding with stream, Content-Length:', responseHeaders.get('Content-Length'))
   event.respondWith(new Response(stream, { headers: responseHeaders }))
+
+  if (state && state.pendingClose && state.controller) {
+    console.log('[SW] Fetch done and pending close - closing after delay')
+    state.pendingClose = false
+    setTimeout(() => {
+      console.log('[SW] Closing stream after fetch + delay')
+      state.closeStream()
+    }, 500)
+  }
 
   port.postMessage({ debug: 'Download started' })
 }

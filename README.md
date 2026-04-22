@@ -5,14 +5,19 @@ StreamSaver.js (legacy-ish)
 > [pypt's fork](https://github.com/pypt/StreamSaver.js-safari) (by Linas Valiukas)
 > which fixed **desktop Safari** service worker support.
 > 
-> **Mobile Safari status**: The `.html` extension bug (iOS saves files as
-> `filename.zip.html`) is **NOT YET CONFIRMED FIXED**. This fork includes
-> experimental changes that may help:
+> **Confirmed Safari support in this fork**:
+> - **Mobile Safari on iOS 26.3**: confirmed working with **1 GB** downloads
+> - **Safari on macOS 26.1**: confirmed working with **10 GB** downloads
+> - **Mobile Safari caveat**: support is still **best-effort** for large downloads.
+>   In repeated testing, iOS Safari can still occasionally stall mid-download or
+>   reload the page, especially under long-running or synthetic stress tests.
+>
+> The Safari fixes in this fork include:
 > - `X-Content-Type-Options: nosniff` to prevent MIME sniffing
 > - Remove charset from Content-Type (Safari quirk)
 > - Dual `filename=` + `filename*=` in Content-Disposition
-> 
-> **Testing needed** - please report if this fixes iOS downloads or not.
+> - Credit-based backpressure for the non-transferable Safari fallback path
+> - Splitting fallback `postMessage` writes into smaller chunks to reduce WebKit pressure
 
 ... Don't worry it's not deprecated. It's still maintained and i still recommend 
 using this when needed. Just want to let you know that there is this new native way
