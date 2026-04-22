@@ -90,12 +90,12 @@ test.describe('Safari fallback chunking', () => {
     const channel = getLastChannel()
     const largeChunk = new Uint8Array(1024 * 1024)
 
-    channel.port1.onmessage({ data: { pull: 8 } })
+    channel.port1.onmessage({ data: { pull: 2 } })
     await writer.write(largeChunk)
 
     const dataMessages = channel.port1.messages.filter(message => message instanceof Uint8Array)
 
-    expect(dataMessages).toHaveLength(8)
-    expect(dataMessages.every(message => message.byteLength === 128 * 1024)).toBe(true)
+    expect(dataMessages).toHaveLength(2)
+    expect(dataMessages.every(message => message.byteLength === 512 * 1024)).toBe(true)
   })
 })
