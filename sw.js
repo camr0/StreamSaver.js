@@ -46,62 +46,24 @@ function createStream (port, downloadUrl) {
   const state = {
     controller: null,
     hasFetched: false,
-    pendingClose: false,
-    chunkQueue: [],
-    pullInProgress: false
+    pendingClose: false
   }
   streamState.set(downloadUrl, state)
-  
-  const enqueueChunk = (chunk) => {
-    const desiredSize = state.controller.desiredSize
-    console.log('[SW] Enqueuing chunk:', chunk.byteLength, 'bytes, desiredSize:', desiredSize)
-    if (desiredSize !== null && desiredSize <= 0) {
-      console.log('[SW] Buffer full, queueing chunk')
-      state.chunkQueue.push(chunk)
-    } else {
-      state.controller.enqueue(chunk)
-      const newDesiredSize = state.controller.desiredSize
-      console.log('[SW] Enqueued, new desiredSize:', newDesiredSize)
-      if (newDesiredSize === null || newDesiredSize > 0) {
-        console.log('[SW] Room for more, sending pull')
-        port.postMessage({ pull: true })
-      }
-    }
-  }
-  
-  const flushQueue = () => {
-    while (state.chunkQueue.length > 0 && state.controller.desiredSize > 0) {
-      const chunk = state.chunkQueue.shift()
-      console.log('[SW] Flushing queued chunk')
-      state.controller.enqueue(chunk)
-    }
-    if (state.chunkQueue.length === 0 && state.pendingClose) {
-      console.log('[SW] Queue empty and pending close - closing stream')
-      state.pendingClose = false
-      setTimeout(() => state.controller.close(), 500)
-    }
-    if (state.chunkQueue.length < 5) {
-      port.postMessage({ pull: true })
-    }
-  }
   
   return new ReadableStream({
     start (controller) {
       state.controller = controller
       port.onmessage = ({ data }) => {
         if (data === 'end') {
-          console.log('[SW] Received "end" - hasFetched:', state.hasFetched, 'queue:', state.chunkQueue.length)
-          if (state.chunkQueue.length === 0) {
-            if (state.hasFetched) {
-              console.log('[SW] Closing stream after 500ms delay')
-              setTimeout(() => {
-                console.log('[SW] Closing stream now')
-                controller.close()
-              }, 500)
-            } else {
-              state.pendingClose = true
-            }
+          console.log('[SW] Received "end" - hasFetched:', state.hasFetched)
+          if (state.hasFetched) {
+            console.log('[SW] Closing stream after 500ms delay for Safari to consume')
+            setTimeout(() => {
+              console.log('[SW] Closing stream now')
+              controller.close()
+            }, 500)
           } else {
+            console.log('[SW] Deferring close until fetch')
             state.pendingClose = true
           }
           return
@@ -113,14 +75,9 @@ function createStream (port, downloadUrl) {
           return
         }
 
-        if (data instanceof ArrayBuffer || data instanceof Uint8Array) {
-          enqueueChunk(data)
-        }
+        console.log('[SW] Enqueuing chunk:', data.byteLength, 'bytes')
+        controller.enqueue(data)
       }
-    },
-    pull (controller) {
-      console.log('[SW] Pull called, queue:', state.chunkQueue.length)
-      flushQueue()
     },
     cancel (reason) {
       console.log('[SW] Stream cancelled:', reason)
