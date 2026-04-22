@@ -48,19 +48,22 @@ function createStream (port, downloadUrl) {
     hasFetched: false,
     pendingClose: false,
     chunkQueue: [],
-    chunksStarted: false
+    chunksStarted: false,
+    pullPending: false
   }
   streamState.set(downloadUrl, state)
   
   const sendPullIfNeeded = () => {
     const desiredSize = state.controller.desiredSize
-    if (state.chunksStarted && desiredSize > 0 && state.chunkQueue.length < 3) {
+    if (state.chunksStarted && desiredSize > 0 && state.chunkQueue.length < 3 && !state.pullPending) {
+      state.pullPending = true
       port.postMessage({ pull: true })
     }
   }
   
   const enqueueChunk = (chunk) => {
     state.chunksStarted = true
+    state.pullPending = false
     const desiredSize = state.controller.desiredSize
     if (desiredSize <= 0) {
       state.chunkQueue.push(chunk)
