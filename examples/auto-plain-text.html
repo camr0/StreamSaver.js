@@ -64,6 +64,12 @@
             await writer.write(chunk)
           }
 
+          // Give Safari time to start consuming the stream before closing
+          if (isIOS) {
+            statusEl.textContent = `Waiting for Safari to consume...`
+            await new Promise(r => setTimeout(r, 1000))
+          }
+
           console.log('[StreamSaver] Calling writer.close()')
           await writer.close()
           console.log('[StreamSaver] writer.close() completed')
