@@ -48,30 +48,20 @@ function createStream (port, downloadUrl) {
     hasFetched: false,
     pendingClose: false,
     chunkQueue: [],
-    lastPullTime: 0
+    chunksStarted: false
   }
   streamState.set(downloadUrl, state)
   
-  const sendPullIfNeeded = () => {
-    const desiredSize = state.controller.desiredSize
-    const now = Date.now()
-    if (desiredSize !== null && desiredSize > 0 && state.chunkQueue.length < 5) {
-      if (now - state.lastPullTime > 50) {
-        state.lastPullTime = now
-        console.log('[SW] Room in stream (desiredSize:', desiredSize, ') - sending pull')
-        port.postMessage({ pull: true })
-      }
-    }
-  }
-  
   const enqueueChunk = (chunk) => {
+    state.chunksStarted = true
     const desiredSize = state.controller.desiredSize
     if (desiredSize !== null && desiredSize <= 0) {
-      console.log('[SW] Buffer full, queueing chunk')
       state.chunkQueue.push(chunk)
     } else {
       state.controller.enqueue(chunk)
-      sendPullIfNeeded()
+      if (state.controller.desiredSize > 0) {
+        port.postMessage({ pull: true })
+      }
     }
   }
   
@@ -85,7 +75,9 @@ function createStream (port, downloadUrl) {
       state.pendingClose = false
       setTimeout(() => state.controller.close(), 500)
     }
-    sendPullIfNeeded()
+    if (state.chunksStarted && state.controller.desiredSize > 0 && state.chunkQueue.length < 3) {
+      port.postMessage({ pull: true })
+    }
   }
   
   return new ReadableStream({
@@ -122,7 +114,6 @@ function createStream (port, downloadUrl) {
       }
     },
     pull (controller) {
-      console.log('[SW] Pull called, queue:', state.chunkQueue.length)
       flushQueue()
     },
     cancel (reason) {
