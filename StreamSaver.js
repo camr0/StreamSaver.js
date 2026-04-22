@@ -268,13 +268,16 @@
     }
 
     let chunks = []
-    let pendingWriteResolve = null
-    let readyForWrite = Promise.resolve()
+    let pendingResolve = null
+    let freeWritesRemaining = 5
+    let waitPromise = Promise.resolve()
 
-    const resolvePendingWrite = () => {
-      if (pendingWriteResolve) {
-        pendingWriteResolve()
-        pendingWriteResolve = null
+    const resolvePending = () => {
+      console.log('[StreamSaver] Received pull from SW - unblocking write')
+      if (pendingResolve) {
+        pendingResolve()
+        pendingResolve = null
+        waitPromise = Promise.resolve()
       }
     }
 
@@ -288,7 +291,21 @@
           return
         }
 
-        return readyForWrite.then(() => {
+        if (freeWritesRemaining > 0) {
+          freeWritesRemaining--
+          console.log('[StreamSaver] Free write:', 5 - freeWritesRemaining, 'remaining:', freeWritesRemaining)
+          channel.port1.postMessage(chunk)
+          bytesWritten += chunk.length
+          if (downloadUrl) {
+            location.href = downloadUrl
+            downloadUrl = null
+          }
+          return
+        }
+
+        console.log('[StreamSaver] Backpressure write - waiting for pull')
+        return waitPromise.then(() => {
+          console.log('[StreamSaver] Backpressure write - sending chunk')
           channel.port1.postMessage(chunk)
           bytesWritten += chunk.length
 
@@ -297,8 +314,8 @@
             downloadUrl = null
           }
 
-          readyForWrite = new Promise(resolve => {
-            pendingWriteResolve = resolve
+          waitPromise = new Promise(resolve => {
+            pendingResolve = resolve
           })
         })
       },
