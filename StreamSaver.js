@@ -101,31 +101,26 @@
     useBlobFallback = true
   }
 
-  test(() => {
-    // Transferable stream was first enabled in chrome v73 behind a flag
+test(() => {
     const { readable } = new TransformStream()
     const mc = new MessageChannel()
     mc.port1.postMessage(readable, [readable])
     mc.port1.close()
     mc.port2.close()
     supportsTransferable = true
-    // Freeze TransformStream object (can only work with native)
+    console.log('[StreamSaver] Transferable streams supported - backpressure handled by browser')
     Object.defineProperty(streamSaver, 'TransformStream', {
       configurable: false,
       writable: false,
       value: TransformStream
     })
-  })
+})
 
-  function loadTransporter () {
-    if (!mitmTransporter) {
-      mitmTransporter = isSecureContext
-        ? makeIframe(streamSaver.mitm)
-        : makePopup(streamSaver.mitm)
-    }
+if (!supportsTransferable) {
+    console.log('[StreamSaver] Transferable streams NOT supported - using chunk-by-chunk postMessage')
   }
 
-  /**
+/**
    * @param  {string} filename filename that should be used
    * @param  {object} options  [description]
    * @param  {number} size     deprecated
