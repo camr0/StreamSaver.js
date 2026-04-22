@@ -6,129 +6,71 @@
     <title>Auto-download test (StreamSaver)</title>
   </head>
   <body>
+    <h1>Auto-download Test</h1>
+    <p>This version auto-closes after writing all data - useful for E2E testing.</p>
+
+    <p>Filename: <input type="text" id="filename" value="test-file.txt"></p>
+    <p>Size (MiB): <input type="number" id="size" value="1" min="1" max="1000"></p>
+    <p><label><input type="checkbox" id="blobFallback"> Force blob fallback (for iOS testing)</label></p>
+    <p><button id="start">Start Download</button></p>
+
+    <p id="status" style="color: gray;">Ready</p>
+
     <script src="https://cdn.jsdelivr.net/npm/web-streams-polyfill@2.0.2/dist/ponyfill.min.js"></script>
     <script src="../StreamSaver.js"></script>
-<script>
-      // Configure mitm path relative to this HTML page
+    <script>
       streamSaver.mitm = '../mitm.html'
-      
-      // Detect iOS for debugging
+
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
-      if (isIOS) {
-        console.log('iOS detected')
-      }
+      if (isIOS) console.log('iOS detected')
 
-      var Lorem = `Lorem ipsum dolor sit amet, consectetur adipiscing elit.
-      Pellentesque gravida condimentum metus et porttitor. Curabitur
-      pharetra vestibulum egestas. Pellentesque quis tortor id ligula
-      cursus luctus ac at nisi. Mauris rutrum mattis vulputate. Donec
-      tempor eget lectus eu rhoncus. Etiam et auctor est. Aenean sem augue,
-      consectetur et ipsum fringilla, rhoncus tincidunt sem. Duis vel
-      rutrum lectus, non dui. Duis non urna non dolor elementum
-      commodo. Praesent commodo maximus lobortis. Curabitur fringilla
-      tellus`.replace(/\s\s+/g, ' ')
+      const Lorem = `Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque gravida condimentum metus et porttitor. Curabitur pharetra vestibulum egestas. Pellentesque quis tortor id ligula cursus luctus ac at nisi. Mauris rutrum mattis vulputate. Donec tempor eget lectus eu rhoncus. Etiam et auctor est. Aenean sem augue, consectetur et ipsum fringilla, rhoncus tincidunt sem. Duis vel rutrum lectus, non dui. Duis non urna non dolor elementum commodo. Praesent commodo maximus lobortis. Curabitur fringilla tellus`.replace(/\s\s+/g, ' ')
 
-      var encode = TextEncoder.prototype.encode.bind(new TextEncoder)
-      let text = encode((Lorem + "\n\n").repeat(2*1024)) // 1 MiB chunk
+      const encode = TextEncoder.prototype.encode.bind(new TextEncoder)
+      const chunk = encode((Lorem + "\n\n").repeat(2*1024)) // 1 MiB chunk
 
-      $start.onclick = async () => {
-        const filename = $filename.value || 'test-file.txt'
-        const sizeMiB = parseInt($size.value) || 1
-        const useBlobFallback = $blobFallback.checked
+      document.getElementById('start').onclick = async () => {
+        const filename = document.getElementById('filename').value || 'test-file.txt'
+        const sizeMiB = parseInt(document.getElementById('size').value) || 1
+        const useBlobFallback = document.getElementById('blobFallback').checked
+        const statusEl = document.getElementById('status')
         let remaining = sizeMiB
 
-        $status.textContent = `Starting download: ${filename} (${sizeMiB} MiB)`
-        $status.style.color = 'blue'
+        statusEl.textContent = `Starting download: ${filename} (${sizeMiB} MiB)`
+        statusEl.style.color = 'blue'
 
         if (useBlobFallback) {
-          // Blob fallback - simpler, works on iOS but has memory limits
-          $status.textContent = `Using blob fallback (buffering in memory)...`
+          statusEl.textContent = `Buffering in memory...`
           const chunks = []
           while (remaining-- > 0) {
-            $status.textContent = `Buffering... ${sizeMiB - remaining}/${sizeMiB} MiB`
-            chunks.push(text)
+            statusEl.textContent = `Buffering... ${sizeMiB - remaining}/${sizeMiB} MiB`
+            chunks.push(chunk)
           }
           const blob = new Blob(chunks, { type: 'application/octet-stream' })
           const link = document.createElement('a')
           link.href = URL.createObjectURL(blob)
           link.download = filename
           link.click()
-          $status.textContent = `Done! (blob fallback)`
-          $status.style.color = 'green'
+          statusEl.textContent = `Done! (blob fallback - check downloads)`
+          statusEl.style.color = 'green'
         } else {
-          // Service worker streaming
           const fileStream = streamSaver.createWriteStream(filename, {
             size: sizeMiB * 1024 * 1024
           })
           const writer = fileStream.getWriter()
 
-          const pump = async () => {
-            if (remaining-- > 0) {
-              $status.textContent = `Writing... ${sizeMiB - remaining}/${sizeMiB} MiB`
-              await writer.write(text)
-              await pump()
-            }
+          while (remaining-- > 0) {
+            statusEl.textContent = `Writing... ${sizeMiB - remaining}/${sizeMiB} MiB`
+            await writer.write(chunk)
           }
 
-          await pump()
+          console.log('[StreamSaver] Calling writer.close()')
           await writer.close()
+          console.log('[StreamSaver] writer.close() completed')
 
-          $status.textContent = `Done! File saved as: ${filename}`
-          $status.style.color = 'green'
+          statusEl.textContent = `Done! File: ${filename}`
+          statusEl.style.color = 'green'
         }
-      }
-    </script>
-
-    <h1>Auto-download Test</h1>
-    <p>This version auto-closes after writing all data - useful for E2E testing.</p>
-
-    <p>Filename: <input type="text" id="$filename" value="test-file.txt"></p>
-    <p>Size (MiB): <input type="number" id="$size" value="1" min="1" max="1000"></p>
-    <p><label><input type="checkbox" id="$blobFallback"> Force blob fallback (for iOS testing)</label></p>
-    <p><button id="$start">Start Download</button></p>
-
-    <p id="$status" style="color: gray;">Ready</p>
-
-    <script>
-      var Lorem = `Lorem ipsum dolor sit amet, consectetur adipiscing elit.
-      Pellentesque gravida condimentum metus et porttitor. Curabitur
-      pharetra vestibulum egestas. Pellentesque quis tortor id ligula
-      cursus luctus ac at nisi. Mauris rutrum mattis vulputate. Donec
-      tempor eget lectus eu rhoncus. Etiam et auctor est. Aenean sem augue,
-      consectetur et ipsum fringilla, rhoncus tincidunt sem. Duis vel
-      rutrum lectus, non dui. Duis non urna non dolor elementum
-      commodo. Praesent commodo maximus lobortis. Curabitur fringilla
-      tellus`.replace(/\s\s+/g, ' ')
-
-      var encode = TextEncoder.prototype.encode.bind(new TextEncoder)
-      let text = encode((Lorem + "\n\n").repeat(2*1024)) // 1 MiB chunk
-
-      $start.onclick = async () => {
-        const filename = $filename.value || 'test-file.zip'
-        const sizeMiB = parseInt($size.value) || 1
-        let remaining = sizeMiB
-
-        $status.textContent = `Starting download: ${filename} (${sizeMiB} MiB)`
-        $status.style.color = 'blue'
-
-        const fileStream = streamSaver.createWriteStream(filename, {
-          size: sizeMiB * 1024 * 1024
-        })
-        const writer = fileStream.getWriter()
-
-        const pump = async () => {
-          if (remaining-- > 0) {
-            $status.textContent = `Writing... ${sizeMiB - remaining}/${sizeMiB} MiB`
-            await writer.write(text)
-            await pump()
-          }
-        }
-
-        await pump()
-        await writer.close()
-
-        $status.textContent = `Done! File saved as: ${filename}`
-        $status.style.color = 'green'
       }
     </script>
   </body>
