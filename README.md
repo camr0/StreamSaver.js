@@ -8,6 +8,9 @@ StreamSaver.js (legacy-ish)
 > **Confirmed Safari support in this fork**:
 > - **Mobile Safari on iOS 26.3**: confirmed working with **1 GB** downloads
 > - **Safari on macOS 26.1**: confirmed working with **10 GB** downloads
+> - **Mobile Safari caveat**: support is still **best-effort** for large downloads.
+>   In repeated testing, iOS Safari can still occasionally stall mid-download or
+>   reload the page, especially under long-running or synthetic stress tests.
 >
 > The Safari fixes in this fork include:
 > - `X-Content-Type-Options: nosniff` to prevent MIME sniffing
