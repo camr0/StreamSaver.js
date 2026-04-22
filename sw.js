@@ -53,14 +53,6 @@ function createStream (port, downloadUrl) {
   }
   streamState.set(downloadUrl, state)
   
-  const sendPullIfNeeded = () => {
-    const desiredSize = state.controller.desiredSize
-    if (state.chunksStarted && desiredSize > 0 && state.chunkQueue.length < 3 && !state.pullPending) {
-      state.pullPending = true
-      port.postMessage({ pull: true })
-    }
-  }
-  
   const enqueueChunk = (chunk) => {
     state.chunksStarted = true
     state.pullPending = false
@@ -69,21 +61,7 @@ function createStream (port, downloadUrl) {
       state.chunkQueue.push(chunk)
     } else {
       state.controller.enqueue(chunk)
-      sendPullIfNeeded()
     }
-  }
-  
-  const flushQueue = () => {
-    while (state.chunkQueue.length > 0 && state.controller.desiredSize > 0) {
-      const chunk = state.chunkQueue.shift()
-      state.controller.enqueue(chunk)
-    }
-    if (state.chunkQueue.length === 0 && state.pendingClose) {
-      console.log('[SW] Queue empty and pending close - closing stream')
-      state.pendingClose = false
-      setTimeout(() => state.controller.close(), 500)
-    }
-    sendPullIfNeeded()
   }
   
   return new ReadableStream({
@@ -91,14 +69,9 @@ function createStream (port, downloadUrl) {
       state.controller = controller
       port.onmessage = ({ data }) => {
         if (data === 'end') {
-          console.log('[SW] Received "end" - hasFetched:', state.hasFetched, 'queue:', state.chunkQueue.length)
           if (state.chunkQueue.length === 0) {
             if (state.hasFetched) {
-              console.log('[SW] Closing stream after 500ms delay')
-              setTimeout(() => {
-                console.log('[SW] Closing stream now')
-                controller.close()
-              }, 500)
+              setTimeout(() => controller.close(), 500)
             } else {
               state.pendingClose = true
             }
@@ -109,7 +82,6 @@ function createStream (port, downloadUrl) {
         }
 
         if (data === 'abort') {
-          console.log('[SW] Received "abort" - erroring stream')
           controller.error('Aborted the download')
           return
         }
@@ -120,10 +92,23 @@ function createStream (port, downloadUrl) {
       }
     },
     pull (controller) {
-      flushQueue()
+      while (state.chunkQueue.length > 0 && controller.desiredSize > 0) {
+        const chunk = state.chunkQueue.shift()
+        controller.enqueue(chunk)
+      }
+      
+      if (state.chunkQueue.length === 0 && state.pendingClose) {
+        state.pendingClose = false
+        setTimeout(() => controller.close(), 500)
+        return
+      }
+      
+      if (state.chunksStarted && controller.desiredSize > 0 && !state.pullPending) {
+        state.pullPending = true
+        port.postMessage({ pull: true })
+      }
     },
     cancel (reason) {
-      console.log('[SW] Stream cancelled:', reason)
       port.postMessage({ abort: true })
     }
   })
