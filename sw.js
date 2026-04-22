@@ -110,6 +110,7 @@ self.onfetch = event => {
   }
 
   if (headers.has('Content-Disposition')) {
+    // Pass through the dual-format disposition from StreamSaver.js
     responseHeaders.set('Content-Disposition', headers.get('Content-Disposition'))
   }
 

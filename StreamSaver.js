@@ -132,6 +132,9 @@
    * @return {WritableStream<Uint8Array>}
    */
   function createWriteStream (filename, options, size) {
+    // Store original filename for Safari compatibility
+    const originalFilename = filename
+
     let opts = {
       size: null,
       pathname: null,
@@ -171,8 +174,9 @@
         transferringReadable: supportsTransferable,
         pathname: opts.pathname || Math.random().toString().slice(-6) + '/' + filename,
         headers: {
-          'Content-Type': 'application/octet-stream; charset=utf-8',
-          'Content-Disposition': "attachment; filename*=UTF-8''" + filename
+          'Content-Type': 'application/octet-stream',
+          // Dual format: Safari needs plain filename=, others use filename*= 
+          'Content-Disposition': `attachment; filename="${originalFilename}"; filename*=UTF-8''${filename}`
         }
       }
 
@@ -294,10 +298,10 @@
       },
       close () {
         if (useBlobFallback) {
-          const blob = new Blob(chunks, { type: 'application/octet-stream; charset=utf-8' })
+          const blob = new Blob(chunks, { type: 'application/octet-stream' })
           const link = document.createElement('a')
           link.href = URL.createObjectURL(blob)
-          link.download = filename
+          link.download = originalFilename
           link.click()
         } else {
           channel.port1.postMessage('end')
