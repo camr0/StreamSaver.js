@@ -304,7 +304,9 @@
           link.download = originalFilename
           link.click()
         } else {
+          console.log('[StreamSaver] Sending "end" to service worker')
           channel.port1.postMessage('end')
+          console.log('[StreamSaver] "end" sent, download should finalize')
         }
       },
       abort () {

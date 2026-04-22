@@ -47,24 +47,28 @@ self.onmessage = event => {
 
 function createStream (port) {
   // ReadableStream is only supported by chrome 52
+  console.log('[SW] Creating ReadableStream for download')
   return new ReadableStream({
     start (controller) {
       // When we receive data on the messageChannel, we write
       port.onmessage = ({ data }) => {
         if (data === 'end') {
+          console.log('[SW] Received "end" - closing stream')
           return controller.close()
         }
 
         if (data === 'abort') {
+          console.log('[SW] Received "abort" - erroring stream')
           controller.error('Aborted the download')
           return
         }
 
+        console.log('[SW] Enqueuing chunk:', data.byteLength, 'bytes')
         controller.enqueue(data)
       }
     },
     cancel (reason) {
-      console.log('user aborted', reason)
+      console.log('[SW] Stream cancelled:', reason)
       port.postMessage({ abort: true })
     }
   })
@@ -78,12 +82,18 @@ self.onfetch = event => {
     return event.respondWith(new Response('pong'))
   }
 
+  console.log('[SW] Fetch intercepted:', url)
+
   const hijacke = map.get(url)
 
-  if (!hijacke) return null
+  if (!hijacke) {
+    console.log('[SW] No match in map for:', url)
+    return null
+  }
 
   const [ stream, data, port ] = hijacke
 
+  console.log('[SW] Found stream for:', url)
   map.delete(url)
 
   // Not comfortable letting any user control all headers
@@ -129,6 +139,7 @@ self.onfetch = event => {
     responseHeaders.set('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${safeFileName}`)
   }
 
+  console.log('[SW] Responding with stream, Content-Length:', responseHeaders.get('Content-Length'))
   event.respondWith(new Response(stream, { headers: responseHeaders }))
 
   port.postMessage({ debug: 'Download started' })
