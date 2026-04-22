@@ -16,6 +16,7 @@
 
   let mitmTransporter = null
   let supportsTransferable = false
+  const fallbackChunkSize = 256 * 1024
   const test = fn => { try { fn() } catch (e) {} }
   const ponyfill = global.WebStreamsPolyfill || {}
   const isSecureContext = global.isSecureContext
@@ -102,20 +103,23 @@
   }
 
   test(() => {
-    // Transferable stream was first enabled in chrome v73 behind a flag
     const { readable } = new TransformStream()
     const mc = new MessageChannel()
     mc.port1.postMessage(readable, [readable])
     mc.port1.close()
     mc.port2.close()
     supportsTransferable = true
-    // Freeze TransformStream object (can only work with native)
+    console.log('[StreamSaver] Transferable streams supported - backpressure handled by browser')
     Object.defineProperty(streamSaver, 'TransformStream', {
       configurable: false,
       writable: false,
       value: TransformStream
     })
   })
+
+  if (!supportsTransferable) {
+    console.log('[StreamSaver] Transferable streams NOT supported - using chunk-by-chunk postMessage')
+  }
 
   function loadTransporter () {
     if (!mitmTransporter) {
@@ -132,6 +136,9 @@
    * @return {WritableStream<Uint8Array>}
    */
   function createWriteStream (filename, options, size) {
+    // Store original filename for Safari compatibility
+    const originalFilename = filename
+
     let opts = {
       size: null,
       pathname: null,
@@ -171,8 +178,9 @@
         transferringReadable: supportsTransferable,
         pathname: opts.pathname || Math.random().toString().slice(-6) + '/' + filename,
         headers: {
-          'Content-Type': 'application/octet-stream; charset=utf-8',
-          'Content-Disposition': "attachment; filename*=UTF-8''" + filename
+          'Content-Type': 'application/octet-stream',
+          // Dual format: Safari needs plain filename=, others use filename*= 
+          'Content-Disposition': `attachment; filename="${originalFilename}"; filename*=UTF-8''${filename}`
         }
       }
 
@@ -240,11 +248,18 @@
           }
         } else if (evt.data.abort) {
           chunks = []
-          channel.port1.postMessage('abort') //send back so controller is aborted
+          channel.port1.postMessage('abort')
           channel.port1.onmessage = null
           channel.port1.close()
           channel.port2.close()
           channel = null
+        } else if (evt.data.done) {
+          channel.port1.onmessage = null
+          channel.port1.close()
+          channel.port2.close()
+          channel = null
+        } else if (evt.data.pull) {
+          grantCredits(typeof evt.data.pull === 'number' ? evt.data.pull : 1)
         }
       }
 
@@ -258,6 +273,54 @@
     }
 
     let chunks = []
+    let availableCredits = 0
+    let pendingResolve = null
+
+    const getFallbackChunks = chunk => {
+      if (supportsTransferable || chunk.byteLength <= fallbackChunkSize) {
+        return [chunk]
+      }
+
+      const chunkParts = []
+      for (let offset = 0; offset < chunk.byteLength; offset += fallbackChunkSize) {
+        chunkParts.push(chunk.subarray(offset, offset + fallbackChunkSize))
+      }
+      return chunkParts
+    }
+
+    const postChunk = chunk => {
+      channel.port1.postMessage(chunk)
+      bytesWritten += chunk.length
+
+      if (downloadUrl) {
+        location.href = downloadUrl
+        downloadUrl = null
+      }
+    }
+
+    const waitForCredit = () => {
+      if (availableCredits > 0) {
+        availableCredits--
+        return Promise.resolve()
+      }
+
+      return new Promise(resolve => {
+        pendingResolve = () => {
+          availableCredits--
+          resolve()
+        }
+      })
+    }
+
+    const grantCredits = count => {
+      availableCredits += count
+
+      if (pendingResolve && availableCredits > 0) {
+        const resolve = pendingResolve
+        pendingResolve = null
+        resolve()
+      }
+    }
 
     return (!useBlobFallback && ts && ts.writable) || new streamSaver.WritableStream({
       write (chunk) {
@@ -265,42 +328,28 @@
           throw new TypeError('Can only write Uint8Arrays')
         }
         if (useBlobFallback) {
-          // Safari... The new IE6
-          // https://github.com/jimmywarting/StreamSaver.js/issues/69
-          //
-          // even though it has everything it fails to download anything
-          // that comes from the service worker..!
           chunks.push(chunk)
           return
         }
 
-        // is called when a new chunk of data is ready to be written
-        // to the underlying sink. It can return a promise to signal
-        // success or failure of the write operation. The stream
-        // implementation guarantees that this method will be called
-        // only after previous writes have succeeded, and never after
-        // close or abort is called.
-
-        // TODO: Kind of important that service worker respond back when
-        // it has been written. Otherwise we can't handle backpressure
-        // EDIT: Transferable streams solves this...
-        channel.port1.postMessage(chunk)
-        bytesWritten += chunk.length
-
-        if (downloadUrl) {
-          location.href = downloadUrl
-          downloadUrl = null
-        }
+        const writeParts = getFallbackChunks(chunk)
+        return writeParts.reduce((promise, writePart) => {
+          return promise.then(() => waitForCredit()).then(() => {
+            postChunk(writePart)
+          })
+        }, Promise.resolve())
       },
       close () {
         if (useBlobFallback) {
-          const blob = new Blob(chunks, { type: 'application/octet-stream; charset=utf-8' })
+          const blob = new Blob(chunks, { type: 'application/octet-stream' })
           const link = document.createElement('a')
           link.href = URL.createObjectURL(blob)
-          link.download = filename
+          link.download = originalFilename
           link.click()
         } else {
+          console.log('[StreamSaver] Sending "end" to service worker')
           channel.port1.postMessage('end')
+          console.log('[StreamSaver] "end" sent, download should finalize')
         }
       },
       abort () {
