@@ -8,6 +8,10 @@
   <body>
     <script src="https://cdn.jsdelivr.net/npm/web-streams-polyfill@2.0.2/dist/ponyfill.min.js"></script>
     <script src="../StreamSaver.js"></script>
+    <script>
+      // Configure mitm path relative to this HTML page
+      streamSaver.mitm = '../mitm.html'
+    </script>
 
     <h1>Auto-download Test</h1>
     <p>This version auto-closes after writing all data - useful for E2E testing.</p>
