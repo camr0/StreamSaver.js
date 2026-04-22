@@ -1,6 +1,19 @@
 StreamSaver.js (legacy-ish)
 ===========================
 
+> **ShareBridge Fork**: This fork builds on
+> [pypt's fork](https://github.com/pypt/StreamSaver.js-safari) (by Linas Valiukas)
+> which fixed **desktop Safari** service worker support.
+> 
+> **Mobile Safari status**: The `.html` extension bug (iOS saves files as
+> `filename.zip.html`) is **NOT YET CONFIRMED FIXED**. This fork includes
+> experimental changes that may help:
+> - `X-Content-Type-Options: nosniff` to prevent MIME sniffing
+> - Remove charset from Content-Type (Safari quirk)
+> - Dual `filename=` + `filename*=` in Content-Disposition
+> 
+> **Testing needed** - please report if this fixes iOS downloads or not.
+
 ... Don't worry it's not deprecated. It's still maintained and i still recommend 
 using this when needed. Just want to let you know that there is this new native way
 to save files to the HD: https://github.com/whatwg/fs which is more

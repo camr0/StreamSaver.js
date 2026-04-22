@@ -89,7 +89,10 @@ self.onfetch = event => {
   // Not comfortable letting any user control all headers
   // so we only copy over the length & disposition
   const responseHeaders = new Headers({
-    'Content-Type': 'application/octet-stream; charset=utf-8',
+    'Content-Type': 'application/octet-stream',
+
+    // Prevent MIME sniffing - fixes Safari adding .html extension
+    'X-Content-Type-Options': 'nosniff',
 
     // To be on the safe side, The link can be opened in a iframe.
     // but octet-stream should stop it.
@@ -119,9 +122,10 @@ self.onfetch = event => {
   let fileName = typeof data === 'string' ? data : data.filename
   if (fileName) {
     console.warn('Depricated')
-    // Make filename RFC5987 compatible
-    fileName = encodeURIComponent(fileName).replace(/['()]/g, escape).replace(/\*/g, '%2A')
-    responseHeaders.set('Content-Disposition', "attachment; filename*=UTF-8''" + fileName)
+    // Make filename RFC5987 compatible, but also include plain filename for Safari
+    const safeFileName = encodeURIComponent(fileName).replace(/['()]/g, escape).replace(/\*/g, '%2A')
+    // Use both formats: plain filename for Safari, RFC5987 for others
+    responseHeaders.set('Content-Disposition', `attachment; filename="${fileName}"; filename*=UTF-8''${safeFileName}`)
   }
 
   event.respondWith(new Response(stream, { headers: responseHeaders }))

@@ -19,7 +19,9 @@
   const test = fn => { try { fn() } catch (e) {} }
   const ponyfill = global.WebStreamsPolyfill || {}
   const isSecureContext = global.isSecureContext
-  let useBlobFallback = false;
+// TODO: Must come up with a real detection test (#69)
+  // Safari should work now with service workers, so don't force blob fallback
+  let useBlobFallback = false
   const downloadStrategy = isSecureContext || 'MozAppearance' in document.documentElement.style
     ? 'iframe'
     : 'navigate'
@@ -29,7 +31,7 @@
     WritableStream: global.WritableStream || ponyfill.WritableStream,
     supported: true,
     version: { full: '2.0.5', major: 2, minor: 0, dot: 5 },
-    mitm: 'https://jimmywarting.github.io/StreamSaver.js/mitm.html?version=2.0.0'
+    mitm: 'mitm.html'
   }
 
   /**
