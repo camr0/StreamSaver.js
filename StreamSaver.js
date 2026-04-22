@@ -101,7 +101,7 @@
     useBlobFallback = true
   }
 
-test(() => {
+  test(() => {
     const { readable } = new TransformStream()
     const mc = new MessageChannel()
     mc.port1.postMessage(readable, [readable])
@@ -114,13 +114,21 @@ test(() => {
       writable: false,
       value: TransformStream
     })
-})
+  })
 
-if (!supportsTransferable) {
+  if (!supportsTransferable) {
     console.log('[StreamSaver] Transferable streams NOT supported - using chunk-by-chunk postMessage')
   }
 
-/**
+  function loadTransporter () {
+    if (!mitmTransporter) {
+      mitmTransporter = isSecureContext
+        ? makeIframe(streamSaver.mitm)
+        : makePopup(streamSaver.mitm)
+    }
+  }
+
+  /**
    * @param  {string} filename filename that should be used
    * @param  {object} options  [description]
    * @param  {number} size     deprecated
