@@ -253,7 +253,7 @@
           channel.port2.close()
           channel = null
         } else if (evt.data.pull) {
-          resolvePending()
+          grantCredits(typeof evt.data.pull === 'number' ? evt.data.pull : 1)
         }
       }
 
@@ -267,15 +267,32 @@
     }
 
     let chunks = []
+    let availableCredits = 0
+    let pendingChunk = null
     let pendingResolve = null
-    let freeWritesRemaining = 5
-    let waitPromise = Promise.resolve()
 
-    const resolvePending = () => {
-      if (pendingResolve) {
-        pendingResolve()
+    const postChunk = chunk => {
+      channel.port1.postMessage(chunk)
+      bytesWritten += chunk.length
+
+      if (downloadUrl) {
+        location.href = downloadUrl
+        downloadUrl = null
+      }
+    }
+
+    const grantCredits = count => {
+      availableCredits += count
+
+      if (pendingResolve && pendingChunk && availableCredits > 0) {
+        const resolve = pendingResolve
+        const chunk = pendingChunk
+
         pendingResolve = null
-        waitPromise = Promise.resolve()
+        pendingChunk = null
+        availableCredits--
+        postChunk(chunk)
+        resolve()
       }
     }
 
@@ -289,29 +306,15 @@
           return
         }
 
-        if (freeWritesRemaining > 0) {
-          freeWritesRemaining--
-          channel.port1.postMessage(chunk)
-          bytesWritten += chunk.length
-          if (downloadUrl) {
-            location.href = downloadUrl
-            downloadUrl = null
-          }
+        if (availableCredits > 0) {
+          availableCredits--
+          postChunk(chunk)
           return
         }
 
-        return waitPromise.then(() => {
-          channel.port1.postMessage(chunk)
-          bytesWritten += chunk.length
-
-          if (downloadUrl) {
-            location.href = downloadUrl
-            downloadUrl = null
-          }
-
-          waitPromise = new Promise(resolve => {
-            pendingResolve = resolve
-          })
+        return new Promise(resolve => {
+          pendingChunk = chunk
+          pendingResolve = resolve
         })
       },
       close () {

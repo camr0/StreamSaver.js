@@ -42,20 +42,39 @@ self.onmessage = event => {
 
 function createStream (port, downloadUrl) {
   console.log('[SW] Creating ReadableStream for download')
-  
+
+  const CREDIT_WINDOW = 1
   const state = {
     controller: null,
     hasFetched: false,
     pendingClose: false,
     chunkQueue: [],
-    chunksStarted: false,
-    pullPending: false
+    outstandingCredits: 0
   }
   streamState.set(downloadUrl, state)
-  
+
+  const getBufferedChunks = controller => {
+    const desiredSize = controller.desiredSize
+
+    // Safari's fallback path behaves most reliably when we keep at most one
+    // chunk in flight across the stream queue and message channel.
+    return state.chunkQueue.length + (desiredSize <= 0 ? 1 : 0)
+  }
+
+  const maybeGrantCredits = controller => {
+    const availableSlots = CREDIT_WINDOW - getBufferedChunks(controller) - state.outstandingCredits
+
+    if (availableSlots > 0) {
+      state.outstandingCredits += availableSlots
+      port.postMessage({ pull: availableSlots })
+    }
+  }
+
   const enqueueChunk = (chunk) => {
-    state.chunksStarted = true
-    state.pullPending = false
+    if (state.outstandingCredits > 0) {
+      state.outstandingCredits--
+    }
+
     const desiredSize = state.controller.desiredSize
     if (desiredSize <= 0) {
       state.chunkQueue.push(chunk)
@@ -96,17 +115,14 @@ function createStream (port, downloadUrl) {
         const chunk = state.chunkQueue.shift()
         controller.enqueue(chunk)
       }
-      
+
       if (state.chunkQueue.length === 0 && state.pendingClose) {
         state.pendingClose = false
         setTimeout(() => controller.close(), 500)
         return
       }
-      
-      if (state.chunksStarted && controller.desiredSize > 0 && !state.pullPending) {
-        state.pullPending = true
-        port.postMessage({ pull: true })
-      }
+
+      maybeGrantCredits(controller)
     },
     cancel (reason) {
       port.postMessage({ abort: true })
