@@ -60,4 +60,37 @@ test.describe('Safari fallback backpressure', () => {
 
     expect(messages).toEqual([{ pull: 1 }, { pull: 1 }])
   })
+
+  test('service worker reports completion when the stream closes', async () => {
+    const createStream = loadCreateStream()
+    const messages = []
+    const port = {
+      onmessage: null,
+      postMessage (message) {
+        messages.push(message)
+      }
+    }
+
+    const stream = createStream(port, 'https://example.test/download')
+    const reader = stream.getReader()
+
+    await Promise.resolve()
+
+    const readPromise = reader.read()
+    port.onmessage({ data: new Uint8Array([9]) })
+
+    await expect(readPromise).resolves.toEqual({
+      done: false,
+      value: new Uint8Array([9])
+    })
+
+    port.onmessage({ data: 'end' })
+
+    await expect(reader.read()).resolves.toEqual({
+      done: true,
+      value: undefined
+    })
+
+    expect(messages).toContainEqual({ done: true })
+  })
 })

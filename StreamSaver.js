@@ -149,6 +149,7 @@
     let downloadUrl = null
     let channel = null
     let ts = null
+    let keepAliveTimer = null
 
     // normalize arguments
     if (Number.isFinite(options)) {
@@ -220,6 +221,28 @@
         channel.port1.postMessage({ readableStream }, [ readableStream ])
       }
 
+      const stopKeepAlive = () => {
+        if (keepAliveTimer) {
+          clearInterval(keepAliveTimer)
+          keepAliveTimer = null
+        }
+      }
+
+      const startKeepAlive = () => {
+        if (supportsTransferable || keepAliveTimer) {
+          return
+        }
+
+        keepAliveTimer = setInterval(() => {
+          if (!channel) {
+            stopKeepAlive()
+            return
+          }
+
+          channel.port1.postMessage('ping')
+        }, 1000)
+      }
+
       channel.port1.onmessage = evt => {
         // Service worker sent us a link that we should open.
         if (evt.data.download) {
@@ -246,8 +269,15 @@
             makeIframe(evt.data.download)
           }
         } else if (evt.data.abort) {
+          stopKeepAlive()
           chunks = []
           channel.port1.postMessage('abort')
+          channel.port1.onmessage = null
+          channel.port1.close()
+          channel.port2.close()
+          channel = null
+        } else if (evt.data.done) {
+          stopKeepAlive()
           channel.port1.onmessage = null
           channel.port1.close()
           channel.port2.close()
@@ -259,9 +289,11 @@
 
       if (mitmTransporter.loaded) {
         mitmTransporter.postMessage(...args)
+        startKeepAlive()
       } else {
         mitmTransporter.addEventListener('load', () => {
           mitmTransporter.postMessage(...args)
+          startKeepAlive()
         }, { once: true })
       }
     }
@@ -331,6 +363,10 @@
         }
       },
       abort () {
+        if (keepAliveTimer) {
+          clearInterval(keepAliveTimer)
+          keepAliveTimer = null
+        }
         chunks = []
         channel.port1.postMessage('abort')
         channel.port1.onmessage = null

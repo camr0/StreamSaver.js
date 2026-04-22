@@ -49,9 +49,22 @@ function createStream (port, downloadUrl) {
     hasFetched: false,
     pendingClose: false,
     chunkQueue: [],
-    outstandingCredits: 0
+    outstandingCredits: 0,
+    closed: false,
+    closeStream: null
   }
   streamState.set(downloadUrl, state)
+
+  const closeStream = () => {
+    if (state.closed) {
+      return
+    }
+
+    state.closed = true
+    state.controller.close()
+    port.postMessage({ done: true })
+  }
+  state.closeStream = closeStream
 
   const getBufferedChunks = controller => {
     const desiredSize = controller.desiredSize
@@ -87,10 +100,14 @@ function createStream (port, downloadUrl) {
     start (controller) {
       state.controller = controller
       port.onmessage = ({ data }) => {
+        if (data === 'ping') {
+          return
+        }
+
         if (data === 'end') {
           if (state.chunkQueue.length === 0) {
             if (state.hasFetched) {
-              setTimeout(() => controller.close(), 500)
+              setTimeout(closeStream, 500)
             } else {
               state.pendingClose = true
             }
@@ -118,7 +135,7 @@ function createStream (port, downloadUrl) {
 
       if (state.chunkQueue.length === 0 && state.pendingClose) {
         state.pendingClose = false
-        setTimeout(() => controller.close(), 500)
+        setTimeout(closeStream, 500)
         return
       }
 
@@ -209,7 +226,7 @@ self.onfetch = event => {
     state.pendingClose = false
     setTimeout(() => {
       console.log('[SW] Closing stream after fetch + delay')
-      state.controller.close()
+      state.closeStream()
     }, 500)
   }
 
