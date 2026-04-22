@@ -16,6 +16,7 @@
 
   let mitmTransporter = null
   let supportsTransferable = false
+  const fallbackChunkSize = 256 * 1024
   const test = fn => { try { fn() } catch (e) {} }
   const ponyfill = global.WebStreamsPolyfill || {}
   const isSecureContext = global.isSecureContext
@@ -149,7 +150,6 @@
     let downloadUrl = null
     let channel = null
     let ts = null
-    let keepAliveTimer = null
 
     // normalize arguments
     if (Number.isFinite(options)) {
@@ -221,28 +221,6 @@
         channel.port1.postMessage({ readableStream }, [ readableStream ])
       }
 
-      const stopKeepAlive = () => {
-        if (keepAliveTimer) {
-          clearInterval(keepAliveTimer)
-          keepAliveTimer = null
-        }
-      }
-
-      const startKeepAlive = () => {
-        if (supportsTransferable || keepAliveTimer) {
-          return
-        }
-
-        keepAliveTimer = setInterval(() => {
-          if (!channel) {
-            stopKeepAlive()
-            return
-          }
-
-          channel.port1.postMessage('ping')
-        }, 1000)
-      }
-
       channel.port1.onmessage = evt => {
         // Service worker sent us a link that we should open.
         if (evt.data.download) {
@@ -269,7 +247,6 @@
             makeIframe(evt.data.download)
           }
         } else if (evt.data.abort) {
-          stopKeepAlive()
           chunks = []
           channel.port1.postMessage('abort')
           channel.port1.onmessage = null
@@ -277,7 +254,6 @@
           channel.port2.close()
           channel = null
         } else if (evt.data.done) {
-          stopKeepAlive()
           channel.port1.onmessage = null
           channel.port1.close()
           channel.port2.close()
@@ -289,19 +265,28 @@
 
       if (mitmTransporter.loaded) {
         mitmTransporter.postMessage(...args)
-        startKeepAlive()
       } else {
         mitmTransporter.addEventListener('load', () => {
           mitmTransporter.postMessage(...args)
-          startKeepAlive()
         }, { once: true })
       }
     }
 
     let chunks = []
     let availableCredits = 0
-    let pendingChunk = null
     let pendingResolve = null
+
+    const getFallbackChunks = chunk => {
+      if (supportsTransferable || chunk.byteLength <= fallbackChunkSize) {
+        return [chunk]
+      }
+
+      const chunkParts = []
+      for (let offset = 0; offset < chunk.byteLength; offset += fallbackChunkSize) {
+        chunkParts.push(chunk.subarray(offset, offset + fallbackChunkSize))
+      }
+      return chunkParts
+    }
 
     const postChunk = chunk => {
       channel.port1.postMessage(chunk)
@@ -313,17 +298,26 @@
       }
     }
 
+    const waitForCredit = () => {
+      if (availableCredits > 0) {
+        availableCredits--
+        return Promise.resolve()
+      }
+
+      return new Promise(resolve => {
+        pendingResolve = () => {
+          availableCredits--
+          resolve()
+        }
+      })
+    }
+
     const grantCredits = count => {
       availableCredits += count
 
-      if (pendingResolve && pendingChunk && availableCredits > 0) {
+      if (pendingResolve && availableCredits > 0) {
         const resolve = pendingResolve
-        const chunk = pendingChunk
-
         pendingResolve = null
-        pendingChunk = null
-        availableCredits--
-        postChunk(chunk)
         resolve()
       }
     }
@@ -338,16 +332,12 @@
           return
         }
 
-        if (availableCredits > 0) {
-          availableCredits--
-          postChunk(chunk)
-          return
-        }
-
-        return new Promise(resolve => {
-          pendingChunk = chunk
-          pendingResolve = resolve
-        })
+        const writeParts = getFallbackChunks(chunk)
+        return writeParts.reduce((promise, writePart) => {
+          return promise.then(() => waitForCredit()).then(() => {
+            postChunk(writePart)
+          })
+        }, Promise.resolve())
       },
       close () {
         if (useBlobFallback) {
@@ -363,10 +353,6 @@
         }
       },
       abort () {
-        if (keepAliveTimer) {
-          clearInterval(keepAliveTimer)
-          keepAliveTimer = null
-        }
         chunks = []
         channel.port1.postMessage('abort')
         channel.port1.onmessage = null
