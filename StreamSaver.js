@@ -16,7 +16,7 @@
 
   let mitmTransporter = null
   let supportsTransferable = false
-  const fallbackChunkSize = 256 * 1024
+  const fallbackChunkSize = 128 * 1024
   const test = fn => { try { fn() } catch (e) {} }
   const ponyfill = global.WebStreamsPolyfill || {}
   const isSecureContext = global.isSecureContext
