@@ -9,6 +9,7 @@ self.addEventListener('activate', event => {
 })
 
 const map = new Map()
+const pendingCloses = new Map() // Track pending close requests
 
 // This should be called once per download
 // Each event has a dataChannel that the data will be piped through
@@ -22,10 +23,11 @@ self.onmessage = event => {
   const data = event.data
   const downloadUrl = data.url || self.registration.scope + Math.random() + '/' + (typeof data === 'string' ? data : data.filename)
   const port = event.ports[0]
-  const metadata = new Array(3) // [stream, data, port]
+  const metadata = new Array(4) // [stream, data, port, hasBeenFetched]
 
   metadata[1] = data
   metadata[2] = port
+  metadata[3] = false // hasBeenFetched
 
   // Note to self:
   // old streamsaver v1.2.0 might still use `readableStream`...
@@ -38,14 +40,14 @@ self.onmessage = event => {
       metadata[0] = evt.data.readableStream
     }
   } else {
-    metadata[0] = createStream(port)
+    metadata[0] = createStream(port, downloadUrl)
   }
 
   map.set(downloadUrl, metadata)
   port.postMessage({ download: downloadUrl })
 }
 
-function createStream (port) {
+function createStream (port, downloadUrl) {
   // ReadableStream is only supported by chrome 52
   console.log('[SW] Creating ReadableStream for download')
   return new ReadableStream({
@@ -53,8 +55,10 @@ function createStream (port) {
       // When we receive data on the messageChannel, we write
       port.onmessage = ({ data }) => {
         if (data === 'end') {
-          console.log('[SW] Received "end" - closing stream')
-          return controller.close()
+          console.log('[SW] Received "end" - will close after fetch')
+          // Don't close immediately - wait for fetch to happen
+          pendingCloses.set(downloadUrl, controller)
+          return
         }
 
         if (data === 'abort') {
@@ -141,6 +145,14 @@ self.onfetch = event => {
 
   console.log('[SW] Responding with stream, Content-Length:', responseHeaders.get('Content-Length'))
   event.respondWith(new Response(stream, { headers: responseHeaders }))
+
+  // Close the stream AFTER Safari has started fetching it
+  const pendingClose = pendingCloses.get(url)
+  if (pendingClose) {
+    console.log('[SW] Closing stream after fetch response')
+    pendingCloses.delete(url)
+    pendingClose.close()
+  }
 
   port.postMessage({ debug: 'Download started' })
 }

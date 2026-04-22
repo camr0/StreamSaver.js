@@ -15,14 +15,14 @@ test.describe('StreamSaver auto-download', () => {
     await page.goto('/examples/auto-plain-text.html');
 
     // Set filename and size
-    await page.fill('#\\$filename', `test-${browserName}.txt`);
-    await page.fill('#\\$size', '1');
+    await page.fill('#filename', `test-${browserName}.txt`);
+    await page.fill('#size', '1');
 
     // Start download
-    await page.click('#\\$start');
+    await page.click('#start');
 
     // Wait for completion (up to 30 seconds for slow browsers)
-    await expect(page.locator('#\\$status')).toHaveText(/Done!/, { timeout: 30000 });
+    await expect(page.locator('#status')).toHaveText(/Done!/, { timeout: 30000 });
 
     // Check for console errors (ignore 404s for favicon etc)
     const realErrors = errors.filter(e => 
@@ -37,13 +37,13 @@ test.describe('StreamSaver auto-download', () => {
   test('should download 10 MiB file', async ({ page, browserName }) => {
     await page.goto('/examples/auto-plain-text.html');
 
-    await page.fill('#\\$filename', `large-${browserName}.txt`);
-    await page.fill('#\\$size', '10');
+    await page.fill('#filename', `large-${browserName}.txt`);
+    await page.fill('#size', '10');
 
-    await page.click('#\\$start');
+    await page.click('#start');
 
     // 10 MiB takes longer
-    await expect(page.locator('#\\$status')).toHaveText(/Done!/, { timeout: 60000 });
+    await expect(page.locator('#status')).toHaveText(/Done!/, { timeout: 60000 });
   });
 
   test('should use service worker (not blob fallback)', async ({ page }) => {
@@ -57,11 +57,11 @@ test.describe('StreamSaver auto-download', () => {
     expect(hasServiceWorker).toBe(true);
 
     // Trigger download
-    await page.fill('#\\$filename', 'sw-test.txt');
-    await page.fill('#\\$size', '1');
-    await page.click('#\\$start');
+    await page.fill('#filename', 'sw-test.txt');
+    await page.fill('#size', '1');
+    await page.click('#start');
 
-    await expect(page.locator('#\\$status')).toHaveText(/Done!/, { timeout: 30000 });
+    await expect(page.locator('#status')).toHaveText(/Done!/, { timeout: 30000 });
   });
 });
 
