@@ -253,7 +253,6 @@
           channel.port2.close()
           channel = null
         } else if (evt.data.pull) {
-          console.log('[StreamSaver] Received pull from SW - ready for more data')
           resolvePending()
         }
       }
@@ -292,7 +291,6 @@
 
         if (freeWritesRemaining > 0) {
           freeWritesRemaining--
-          console.log('[StreamSaver] Free write:', 5 - freeWritesRemaining, 'remaining:', freeWritesRemaining)
           channel.port1.postMessage(chunk)
           bytesWritten += chunk.length
           if (downloadUrl) {
@@ -302,9 +300,7 @@
           return
         }
 
-        console.log('[StreamSaver] Backpressure write - waiting for pull')
         return waitPromise.then(() => {
-          console.log('[StreamSaver] Backpressure write - sending chunk')
           channel.port1.postMessage(chunk)
           bytesWritten += chunk.length
 

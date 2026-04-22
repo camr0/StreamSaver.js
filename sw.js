@@ -48,31 +48,36 @@ function createStream (port, downloadUrl) {
     hasFetched: false,
     pendingClose: false,
     chunkQueue: [],
-    pullInProgress: false
+    lastPullTime: 0
   }
   streamState.set(downloadUrl, state)
   
+  const sendPullIfNeeded = () => {
+    const desiredSize = state.controller.desiredSize
+    const now = Date.now()
+    if (desiredSize !== null && desiredSize > 0 && state.chunkQueue.length < 5) {
+      if (now - state.lastPullTime > 50) {
+        state.lastPullTime = now
+        console.log('[SW] Room in stream (desiredSize:', desiredSize, ') - sending pull')
+        port.postMessage({ pull: true })
+      }
+    }
+  }
+  
   const enqueueChunk = (chunk) => {
     const desiredSize = state.controller.desiredSize
-    console.log('[SW] Enqueuing chunk:', chunk.byteLength, 'bytes, desiredSize:', desiredSize)
     if (desiredSize !== null && desiredSize <= 0) {
       console.log('[SW] Buffer full, queueing chunk')
       state.chunkQueue.push(chunk)
     } else {
       state.controller.enqueue(chunk)
-      const newDesiredSize = state.controller.desiredSize
-      console.log('[SW] Enqueued, new desiredSize:', newDesiredSize)
-      if (newDesiredSize === null || newDesiredSize > 0) {
-        console.log('[SW] Room for more, sending pull')
-        port.postMessage({ pull: true })
-      }
+      sendPullIfNeeded()
     }
   }
   
   const flushQueue = () => {
     while (state.chunkQueue.length > 0 && state.controller.desiredSize > 0) {
       const chunk = state.chunkQueue.shift()
-      console.log('[SW] Flushing queued chunk')
       state.controller.enqueue(chunk)
     }
     if (state.chunkQueue.length === 0 && state.pendingClose) {
@@ -80,9 +85,7 @@ function createStream (port, downloadUrl) {
       state.pendingClose = false
       setTimeout(() => state.controller.close(), 500)
     }
-    if (state.chunkQueue.length < 5) {
-      port.postMessage({ pull: true })
-    }
+    sendPullIfNeeded()
   }
   
   return new ReadableStream({
