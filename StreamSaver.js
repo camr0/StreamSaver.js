@@ -247,11 +247,14 @@
           }
         } else if (evt.data.abort) {
           chunks = []
-          channel.port1.postMessage('abort') //send back so controller is aborted
+          channel.port1.postMessage('abort')
           channel.port1.onmessage = null
           channel.port1.close()
           channel.port2.close()
           channel = null
+        } else if (evt.data.pull) {
+          console.log('[StreamSaver] Received pull from SW - ready for more data')
+          resolvePendingWrite()
         }
       }
 
@@ -265,6 +268,15 @@
     }
 
     let chunks = []
+    let pendingWriteResolve = null
+    let readyForWrite = Promise.resolve()
+
+    const resolvePendingWrite = () => {
+      if (pendingWriteResolve) {
+        pendingWriteResolve()
+        pendingWriteResolve = null
+      }
+    }
 
     return (!useBlobFallback && ts && ts.writable) || new streamSaver.WritableStream({
       write (chunk) {
@@ -272,32 +284,23 @@
           throw new TypeError('Can only write Uint8Arrays')
         }
         if (useBlobFallback) {
-          // Safari... The new IE6
-          // https://github.com/jimmywarting/StreamSaver.js/issues/69
-          //
-          // even though it has everything it fails to download anything
-          // that comes from the service worker..!
           chunks.push(chunk)
           return
         }
 
-        // is called when a new chunk of data is ready to be written
-        // to the underlying sink. It can return a promise to signal
-        // success or failure of the write operation. The stream
-        // implementation guarantees that this method will be called
-        // only after previous writes have succeeded, and never after
-        // close or abort is called.
+        return readyForWrite.then(() => {
+          channel.port1.postMessage(chunk)
+          bytesWritten += chunk.length
 
-        // TODO: Kind of important that service worker respond back when
-        // it has been written. Otherwise we can't handle backpressure
-        // EDIT: Transferable streams solves this...
-        channel.port1.postMessage(chunk)
-        bytesWritten += chunk.length
+          if (downloadUrl) {
+            location.href = downloadUrl
+            downloadUrl = null
+          }
 
-        if (downloadUrl) {
-          location.href = downloadUrl
-          downloadUrl = null
-        }
+          readyForWrite = new Promise(resolve => {
+            pendingWriteResolve = resolve
+          })
+        })
       },
       close () {
         if (useBlobFallback) {
