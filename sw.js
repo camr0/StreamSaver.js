@@ -48,9 +48,21 @@ function createStream (port, downloadUrl) {
     hasFetched: false,
     pendingClose: false,
     chunkQueue: [],
-    chunksStarted: false
+    chunksStarted: false,
+    lastPullTime: 0
   }
   streamState.set(downloadUrl, state)
+  
+  const sendPullIfNeeded = () => {
+    const desiredSize = state.controller.desiredSize
+    const now = Date.now()
+    if (state.chunksStarted && desiredSize > 0 && state.chunkQueue.length < 3) {
+      if (now - state.lastPullTime >= 10) {
+        state.lastPullTime = now
+        port.postMessage({ pull: true })
+      }
+    }
+  }
   
   const enqueueChunk = (chunk) => {
     state.chunksStarted = true
@@ -59,9 +71,7 @@ function createStream (port, downloadUrl) {
       state.chunkQueue.push(chunk)
     } else {
       state.controller.enqueue(chunk)
-      if (state.controller.desiredSize > 0) {
-        port.postMessage({ pull: true })
-      }
+      sendPullIfNeeded()
     }
   }
   
@@ -75,9 +85,7 @@ function createStream (port, downloadUrl) {
       state.pendingClose = false
       setTimeout(() => state.controller.close(), 500)
     }
-    if (state.chunksStarted && state.controller.desiredSize > 0 && state.chunkQueue.length < 3) {
-      port.postMessage({ pull: true })
-    }
+    sendPullIfNeeded()
   }
   
   return new ReadableStream({
