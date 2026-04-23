@@ -98,4 +98,27 @@ test.describe('Safari fallback chunking', () => {
     expect(dataMessages).toHaveLength(4)
     expect(dataMessages.every(message => message.byteLength === 256 * 1024)).toBe(true)
   })
+
+  test('waits for the service worker done ack before resolving close', async () => {
+    const { streamSaver, getLastChannel } = loadStreamSaverForFallbackWrite()
+    const fileStream = streamSaver.createWriteStream('close.bin', { size: 16 })
+    const writer = fileStream.getWriter()
+    const channel = getLastChannel()
+
+    const closePromise = writer.close()
+    let closeResolved = false
+    closePromise.then(() => {
+      closeResolved = true
+    })
+
+    await new Promise(resolve => setTimeout(resolve, 0))
+
+    expect(channel.port1.messages).toContain('end')
+    expect(closeResolved).toBe(false)
+
+    channel.port1.onmessage({ data: { done: true } })
+
+    await expect(closePromise).resolves.toBeUndefined()
+    expect(closeResolved).toBe(true)
+  })
 })
