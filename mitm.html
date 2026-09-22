@@ -37,8 +37,17 @@ let sw = null
 let scope = ''
 
 function registerWorker() {
-  return navigator.serviceWorker.getRegistration('./').then(swReg => {
-    return swReg || navigator.serviceWorker.register('sw.js', { scope: './' })
+  // Test hook: `mitm.html?credit=N` re-registers the worker as
+  // `sw.js?credit=N` so the worker can read the override from its own URL.
+  // When the param is absent this behaves exactly as before.
+  const credit = new URLSearchParams(location.search).get('credit')
+  const swUrl = credit ? `sw.js?credit=${encodeURIComponent(credit)}` : 'sw.js'
+  const prepare = credit
+    ? navigator.serviceWorker.getRegistration('./').then(swReg => swReg && swReg.unregister())
+    : Promise.resolve()
+
+  return prepare.then(() => navigator.serviceWorker.getRegistration('./')).then(swReg => {
+    return swReg || navigator.serviceWorker.register(swUrl, { scope: './' })
   }).then(swReg => {
     const swRegTmp = swReg.installing || swReg.waiting
 

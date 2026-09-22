@@ -16,7 +16,7 @@
 
   let mitmTransporter = null
   let supportsTransferable = false
-  const fallbackChunkSize = 256 * 1024
+  let fallbackChunkSize = 256 * 1024
   const test = fn => { try { fn() } catch (e) {} }
   const ponyfill = global.WebStreamsPolyfill || {}
   const isSecureContext = global.isSecureContext
@@ -32,7 +32,18 @@
     WritableStream: global.WritableStream || ponyfill.WritableStream,
     supported: true,
     version: { full: '2.0.5', major: 2, minor: 0, dot: 5 },
-    mitm: 'mitm.html'
+    mitm: 'mitm.html',
+
+    // Test hook: the Safari chunk-by-chunk postMessage path splits any write
+    // larger than this into sub-chunks. Exposed so the value can be swept
+    // without editing this file (previously tuned by hand across 4 commits).
+    get fallbackChunkSize () {
+      return fallbackChunkSize
+    },
+    set fallbackChunkSize (bytes) {
+      const value = Number(bytes)
+      if (Number.isFinite(value) && value > 0) fallbackChunkSize = value
+    }
   }
 
   /**

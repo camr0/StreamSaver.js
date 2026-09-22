@@ -10,7 +10,7 @@
     <p>This version auto-closes after writing all data - useful for E2E testing.</p>
 
     <p>Filename: <input type="text" id="filename" value="test-file.txt"></p>
-    <p>Size (MiB): <input type="number" id="size" value="1" min="1" max="1000"></p>
+    <p>Size (MiB): <input type="number" id="size" value="1" min="1"></p>
     <p><label><input type="checkbox" id="blobFallback"> Force blob fallback (for iOS testing)</label></p>
     <p><button id="start">Start Download</button></p>
 
@@ -19,64 +19,192 @@
     <script src="https://cdn.jsdelivr.net/npm/web-streams-polyfill@2.0.2/dist/ponyfill.min.js"></script>
     <script src="../StreamSaver.js"></script>
     <script>
-      streamSaver.mitm = '../mitm.html'
+      /* ─── Automation surface ───────────────────────────────────────────────
+       * Every knob is a query param, so the page can be driven without a tap
+       * (xcrun simctl openurl, or WebKit remote debug Runtime.evaluate):
+       *
+       *   ?auto=1              start on load, no click
+       *   &size=<MiB>          payload size                        (default 1)
+       *   &filename=<name>     download filename                   (default test-file.txt)
+       *   &mode=sw|blob        SW stream vs in-memory Blob          (default sw)
+       *   &chunk=<KiB>         page-side writer.write() chunk size  (default 1024)
+       *   &fallbackChunk=<KiB> StreamSaver Safari sub-chunk size    (default 256)
+       *   &credit=<n>          service worker CREDIT_WINDOW         (default 1)
+       *   &closeDelay=<ms>     pause before close() on iOS          (default 1000)
+       *
+       * The payload is deterministic and self-describing: exactly
+       * size*1024*1024 bytes, split into chunks that each begin with
+       * "\n[SS-CHUNK i/total]\n". Verify the landed file on the host with:
+       *
+       *   stat -f%z <file>              == size*1048576
+       *   grep -c '\[SS-CHUNK ' <file>  == total (chunkCount)
+       *
+       * Live state is on window.__testState (phase, bytesWritten, error, ...)
+       * and document.title is kept in sync as "SS:<phase>".
+       * ──────────────────────────────────────────────────────────────────── */
+      const params = new URLSearchParams(location.search)
+      const paramNum = (key, fallback) => {
+        const raw = params.get(key)
+        if (raw === null || raw === '') return fallback
+        const value = Number(raw)
+        return Number.isFinite(value) && value > 0 ? value : fallback
+      }
+
+      const config = {
+        auto: params.get('auto') === '1',
+        sizeMiB: paramNum('size', 1),
+        filename: params.get('filename') || 'test-file.txt',
+        mode: params.get('mode') === 'blob' ? 'blob' : 'sw',
+        chunkBytes: Math.round(paramNum('chunk', 1024) * 1024),
+        fallbackChunkBytes: Math.round(paramNum('fallbackChunk', 256) * 1024),
+        credit: paramNum('credit', 1),
+        closeDelayMs: paramNum('closeDelay', 1000)
+      }
+
+      const totalBytes = Math.floor(config.sizeMiB * 1024 * 1024)
+      const chunkCount = Math.ceil(totalBytes / config.chunkBytes)
+
+      streamSaver.mitm = '../mitm.html' + (config.credit !== 1 ? `?credit=${config.credit}` : '')
+      streamSaver.fallbackChunkSize = config.fallbackChunkBytes
+
+      const state = {
+        config,
+        phase: 'ready',
+        expectedBytes: totalBytes,
+        chunkCount,
+        bytesWritten: 0,
+        startedAt: null,
+        finishedAt: null,
+        error: null
+      }
+      window.__testState = state
+
+      const statusEl = document.getElementById('status')
+      const setStatus = (text, color) => {
+        statusEl.textContent = text
+        statusEl.style.color = color
+      }
+      const setPhase = phase => {
+        state.phase = phase
+        document.title = 'SS:' + phase
+      }
+
+      window.addEventListener('error', evt => {
+        state.error = String((evt.error && evt.error.stack) || evt.message)
+        setPhase('error')
+        setStatus('Error: ' + evt.message, 'red')
+      })
+      window.addEventListener('unhandledrejection', evt => {
+        state.error = String((evt.reason && evt.reason.stack) || evt.reason)
+        setPhase('error')
+        setStatus('Error: ' + evt.reason, 'red')
+      })
 
       const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
       if (isIOS) console.log('iOS detected')
+      console.log('[test] config', JSON.stringify(config))
 
       const Lorem = `Lorem ipsum dolor sit amet, consectetur adipiscing elit. Pellentesque gravida condimentum metus et porttitor. Curabitur pharetra vestibulum egestas. Pellentesque quis tortor id ligula cursus luctus ac at nisi. Mauris rutrum mattis vulputate. Donec tempor eget lectus eu rhoncus. Etiam et auctor est. Aenean sem augue, consectetur et ipsum fringilla, rhoncus tincidunt sem. Duis vel rutrum lectus, non dui. Duis non urna non dolor elementum commodo. Praesent commodo maximus lobortis. Curabitur fringilla tellus`.replace(/\s\s+/g, ' ')
 
       const encode = TextEncoder.prototype.encode.bind(new TextEncoder)
-      const chunk = encode((Lorem + "\n\n").repeat(2*1024)) // 1 MiB chunk
+      const filler = encode((Lorem + "\n\n").repeat(2*1024)) // ~1 MiB of body text
 
-      document.getElementById('start').onclick = async () => {
-        const filename = document.getElementById('filename').value || 'test-file.txt'
-        const sizeMiB = parseInt(document.getElementById('size').value) || 1
-        const useBlobFallback = document.getElementById('blobFallback').checked
-        const statusEl = document.getElementById('status')
-        let remaining = sizeMiB
-
-        statusEl.textContent = `Starting download: ${filename} (${sizeMiB} MiB)`
-        statusEl.style.color = 'blue'
-
-        if (useBlobFallback) {
-          statusEl.textContent = `Buffering in memory...`
-          const chunks = []
-          while (remaining-- > 0) {
-            statusEl.textContent = `Buffering... ${sizeMiB - remaining}/${sizeMiB} MiB`
-            chunks.push(chunk)
+      // Deterministic payload of exactly `totalBytes`, each chunk prefixed with
+      // an index marker so duplication/truncation/reordering is detectable.
+      function * payload () {
+        for (let i = 0; i < chunkCount; i++) {
+          const remaining = totalBytes - i * config.chunkBytes
+          const size = Math.min(config.chunkBytes, remaining)
+          const out = new Uint8Array(size)
+          const head = encode(`\n[SS-CHUNK ${i}/${chunkCount}]\n`)
+          out.set(head.subarray(0, Math.min(head.length, size)), 0)
+          for (let offset = head.length; offset < size; offset += filler.length) {
+            out.set(filler.subarray(0, Math.min(filler.length, size - offset)), offset)
           }
-          const blob = new Blob(chunks, { type: 'application/octet-stream' })
-          const link = document.createElement('a')
-          link.href = URL.createObjectURL(blob)
-          link.download = filename
-          link.click()
-          statusEl.textContent = `Done! (blob fallback - check downloads)`
-          statusEl.style.color = 'green'
-        } else {
-          const fileStream = streamSaver.createWriteStream(filename, {
-            size: sizeMiB * 1024 * 1024
-          })
-          const writer = fileStream.getWriter()
-
-          while (remaining-- > 0) {
-            statusEl.textContent = `Writing... ${sizeMiB - remaining}/${sizeMiB} MiB`
-            await writer.write(chunk)
-          }
-
-          // Give Safari time to start consuming the stream before closing
-          if (isIOS) {
-            statusEl.textContent = `Waiting for Safari to consume...`
-            await new Promise(r => setTimeout(r, 1000))
-          }
-
-          console.log('[StreamSaver] Calling writer.close()')
-          await writer.close()
-          console.log('[StreamSaver] writer.close() completed')
-
-          statusEl.textContent = `Done! File: ${filename}`
-          statusEl.style.color = 'green'
+          yield out
         }
+      }
+
+      async function writeViaBlob () {
+        setPhase('buffering')
+        const chunks = []
+        for (const part of payload()) {
+          chunks.push(part)
+          state.bytesWritten += part.length
+          setStatus(`Buffering... ${(state.bytesWritten / 1048576).toFixed(1)}/${config.sizeMiB} MiB`)
+          await new Promise(resolve => setTimeout(resolve, 0))
+        }
+
+        setPhase('saving')
+        const blob = new Blob(chunks, { type: 'application/octet-stream' })
+        const link = document.createElement('a')
+        link.href = URL.createObjectURL(blob)
+        link.download = config.filename
+        link.click()
+
+        setPhase('done')
+        state.finishedAt = Date.now()
+        setStatus('Done! (blob fallback - check downloads)', 'green')
+      }
+
+      async function writeViaServiceWorker () {
+        const fileStream = streamSaver.createWriteStream(config.filename, { size: totalBytes })
+        const writer = fileStream.getWriter()
+        setPhase('writing')
+
+        for (const part of payload()) {
+          await writer.write(part)
+          state.bytesWritten += part.length
+          setStatus(`Writing... ${(state.bytesWritten / 1048576).toFixed(1)}/${config.sizeMiB} MiB`, 'blue')
+        }
+
+        // Give Safari time to start consuming the stream before closing
+        if (isIOS && config.closeDelayMs > 0) {
+          setPhase('waiting-for-safari')
+          setStatus('Waiting for Safari to consume...', 'orange')
+          await new Promise(resolve => setTimeout(resolve, config.closeDelayMs))
+        }
+
+        setPhase('closing')
+        console.log('[test] Calling writer.close()')
+        await writer.close()
+        console.log('[test] writer.close() completed')
+
+        setPhase('done')
+        state.finishedAt = Date.now()
+        setStatus(`Done! File: ${config.filename}`, 'green')
+      }
+
+      async function start () {
+        if (state.phase !== 'ready') return
+        state.startedAt = Date.now()
+        setPhase('starting')
+        setStatus(`Starting download: ${config.filename} (${config.sizeMiB} MiB)`, 'blue')
+        console.log('[test] start', JSON.stringify(config))
+
+        try {
+          const useBlob = document.getElementById('blobFallback').checked || config.mode === 'blob'
+          if (useBlob) {
+            await writeViaBlob()
+          } else {
+            await writeViaServiceWorker()
+          }
+        } catch (err) {
+          state.error = String((err && err.stack) || err)
+          setPhase('error')
+          setStatus('Error: ' + err, 'red')
+          console.error('[test] failed', err)
+        }
+      }
+
+      document.getElementById('filename').value = config.filename
+      document.getElementById('size').value = config.sizeMiB
+      document.getElementById('blobFallback').checked = config.mode === 'blob'
+      document.getElementById('start').onclick = start
+
+      if (config.auto) {
+        setStatus('Auto-starting (auto=1)...', 'blue')
+        start()
       }
     </script>
   </body>

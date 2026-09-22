@@ -41,10 +41,29 @@ self.onmessage = event => {
   port.postMessage({ download: downloadUrl })
 }
 
+// Test hook: mitm.html?credit=N re-registers this worker as `sw.js?credit=N`,
+// so the override arrives on our own URL. Guarded so this file still loads in a
+// bare VM context (see tests/backpressure.spec.js, which has no location or
+// URLSearchParams).
+function readCreditWindow () {
+  try {
+    const search = (self.location && self.location.search) || ''
+    const match = /[?&]credit=(\d+)/.exec(search)
+    if (!match) {
+      return 1
+    }
+
+    const value = parseInt(match[1], 10)
+    return Number.isInteger(value) && value >= 1 && value <= 64 ? value : 1
+  } catch (err) {
+    return 1
+  }
+}
+
 function createStream (port, downloadUrl) {
   console.log(swLogPrefix(), 'Creating ReadableStream for download')
 
-  const CREDIT_WINDOW = 1
+  const CREDIT_WINDOW = readCreditWindow()
   const state = {
     controller: null,
     hasFetched: false,
